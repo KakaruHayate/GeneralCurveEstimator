@@ -74,7 +74,6 @@ def validate_epoch(dataloader, model, device, saver, draw=False):
 
     sum_loss = 0
     sum_mae = 0
-    val_num = 0
     gt_cache = []
     pred_cache = []
     criterion = nn.MSELoss()
@@ -111,11 +110,10 @@ def validate_epoch(dataloader, model, device, saver, draw=False):
                     curve_pred=curve_pred_draw
                 )
             })
-            val_num += 1
 
     mean_loss = sum_loss / len(dataloader.dataset)
     r_squared = cacl_r_squared(torch.cat(gt_cache,dim=1), torch.cat(pred_cache,dim=1))
-    mean_mae = sum_mae / val_num
+    mean_mae = sum_mae / len(dataloader.dataset)
     saver.log_info(' --- <validation> --- loss: {:.6f} MAE: {:.6f} R_squared: {:.6f}'.format(mean_loss, mean_mae, r_squared))
     saver.log_value({
         'validation/loss': mean_loss, 
