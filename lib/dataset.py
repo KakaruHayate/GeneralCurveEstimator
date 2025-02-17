@@ -11,7 +11,8 @@ class CurveTrainingDataset(torch.utils.data.Dataset):
             self,
             root_dir: pathlib.Path,
             crop_size: int = 128,
-            volume_aug_rate: float = 0.5
+            volume_aug_rate: float = 0.5,
+            use_lpc: bool =False
     ):
         if not isinstance(root_dir, pathlib.Path):
             root_dir = pathlib.Path(root_dir)
@@ -26,6 +27,7 @@ class CurveTrainingDataset(torch.utils.data.Dataset):
             raise ValueError("Elements in train.txt and lengths.npy do not match!")
         self.crop_size = crop_size
         self.volume_aug_rate = volume_aug_rate
+        self.use_lpc = use_lpc
 
         self.index_mapping = []
         for i, length in enumerate(self.lengths):
@@ -40,6 +42,7 @@ class CurveTrainingDataset(torch.utils.data.Dataset):
         data = np.load(self.files[self.index_mapping[idx]])
         spectrogram = data['spectrogram']
         curve = data['curve']
+        lpc = data['lpc']
         if data['spectrogram'].shape[0] < self.crop_size:
             # choose another random file
             idx = random.randint(0, len(self.files) - 1)
@@ -52,11 +55,18 @@ class CurveTrainingDataset(torch.utils.data.Dataset):
         start = random.randint(0, spectrogram.shape[0] - self.crop_size)
         spectrogram = spectrogram[start:start + self.crop_size, :]
         curve = curve[start:start + self.crop_size]
+        if self.use_lpc:
+            if lpc is None:
+                raise ValueError(f'LPC is NONE')
+            else:
+                lpc = lpc[start:start + self.crop_size]
+                spectrogram = np.concatenate((spectrogram, lpc), axis=1)
         return spectrogram, curve
 
 
 class CurveValidationDataset(torch.utils.data.Dataset):
-    def __init__(self, root_dir: pathlib.Path):
+    def __init__(self, root_dir: pathlib.Path, use_lpc: bool =False):
+        self.use_lpc = use_lpc
         if not isinstance(root_dir, pathlib.Path):
             root_dir = pathlib.Path(root_dir)
         self.files = []
@@ -69,4 +79,12 @@ class CurveValidationDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         data = np.load(self.files[idx])
-        return data['spectrogram'], data['curve']
+        spectrogram = data['spectrogram']
+        curve = data['curve']
+        lpc = data['lpc']
+        if self.use_lpc:
+            if lpc is None:
+                raise ValueError(f'LPC is NONE')
+            else:
+                spectrogram = np.concatenate((spectrogram, lpc), axis=1)
+        return spectrogram, curve
