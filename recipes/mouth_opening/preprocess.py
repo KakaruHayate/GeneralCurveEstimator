@@ -10,7 +10,6 @@ import pandas
 import torch
 import tqdm
 from scipy.interpolate import interp1d
-from icecream import ic
 
 sys.path.append(pathlib.Path(__file__).parent.parent.parent.as_posix())
 from lib.transforms import PitchAdjustableMelSpectrogram, dynamic_range_compression_torch
