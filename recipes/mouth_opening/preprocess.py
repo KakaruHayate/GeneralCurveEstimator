@@ -22,34 +22,37 @@ LIPS_DISTANCE = 4
 
 
 @click.command()
-@click.argument('source_dir', type=click.Path(exists=True, path_type=pathlib.Path))
-@click.argument('target_dir', type=click.Path(path_type=pathlib.Path))
+@click.argument("source_dir", type=click.Path(exists=True, path_type=pathlib.Path))
+@click.argument("target_dir", type=click.Path(path_type=pathlib.Path))
 @click.option(
-    '--val_list', type=click.Path(exists=True, path_type=pathlib.Path),
-    help='Validation file list in a text file. Use relative path to the source directory, one file per line.'
+    "--val_list", type=click.Path(exists=True, path_type=pathlib.Path),
+    help="Validation file list in a text file. Use relative path to the source directory, one file per line."
 )
 @click.option(
-    '--val_num', default=5, type=int,
-    help='Number of validation samples for random selection if val_list is not provided.'
+    "--val_num", default=5, type=int,
+    help="Number of validation samples for random selection if val_list is not provided."
 )
 @click.option(
-    '--attr_type', default=SUBTRACTED_JAW_OPEN, type=int,
+    "--attr_type", default=SUBTRACTED_JAW_OPEN, type=int,
     help=(
-            'Attribute type for processing '
-            '[0: jawOpen, 1: mouthClose, 2: jawOpen * (1 - mouthClose), '
-            '3: jawOpen - mouthClose), 4. LipsDistance].')
+            "Attribute type for processing "
+            "[0: jawOpen, 1: mouthClose, 2: jawOpen * (1 - mouthClose), "
+            "3: jawOpen - mouthClose), 4. LipsDistance].")
 )
 @click.option(
-    '--subtraction_offset', default=0.05, type=float,
-    help='Offset for subtracted jawOpen attribute (X = jawOpen - mouthClose + offset).'
+    "--subtraction_offset", default=0.05, type=float,
+    help="Offset for subtracted jawOpen attribute (X = jawOpen - mouthClose + offset)."
 )
-@click.option('--use_vad', is_flag=True, help='Use VAD for voice activity detection.')
-@click.option('--sample_rate', default=16000, type=int, help='Sample rate for audio processing.')
-@click.option('--mel_bins', default=80, type=int, help='Number of mel bins for spectrogram.')
-@click.option('--hop_size', default=320, type=int, help='Hop size for spectrogram.')
-@click.option('--win_size', default=1024, type=int, help='Window size for spectrogram.')
-@click.option('--f_min', default=0, type=int, help='Minimum frequency for spectrogram.')
-@click.option('--f_max', default=None, type=int, help='Maximum frequency for spectrogram.')
+@click.option(
+    "--use_mask", is_flag=True,
+    help="Use Aegisub mask file or VAD model to mask non-vocal parts."
+)
+@click.option("--sample_rate", default=16000, type=int, help="Sample rate for audio processing.")
+@click.option("--mel_bins", default=80, type=int, help="Number of mel bins for spectrogram.")
+@click.option("--hop_size", default=320, type=int, help="Hop size for spectrogram.")
+@click.option("--win_size", default=1024, type=int, help="Window size for spectrogram.")
+@click.option("--f_min", default=0, type=int, help="Minimum frequency for spectrogram.")
+@click.option("--f_max", default=None, type=int, help="Maximum frequency for spectrogram.")
 def preprocess(
         source_dir: pathlib.Path,
         target_dir: pathlib.Path,
@@ -57,7 +60,7 @@ def preprocess(
         val_num: int,
         attr_type: int,
         subtraction_offset: float,
-        use_vad: bool,
+        use_mask: bool,
         sample_rate: int,
         mel_bins: int,
         hop_size: int,
@@ -87,14 +90,7 @@ def preprocess(
         n_mels=mel_bins,
         center=True
     )
-    if use_vad:
-        from funasr import AutoModel
-        vad = AutoModel(
-            model="fsmn-vad", model_revision="v2.0.4", disable_update=True,
-            log_level="ERROR", disable_pbar=True, disable_log=True
-        )
-    else:
-        vad = None
+    vad = None
 
     with tqdm.tqdm(csv_list) as bar:
         for csv_file in bar:
@@ -140,19 +136,26 @@ def preprocess(
                 interp_fn = interp1d(xs, ys, kind="linear", fill_value="extrapolate")
                 t_mel = numpy.linspace(0, len(audio) / sample_rate, mel.shape[0])
                 curve = numpy.ndarray.astype(interp_fn(t_mel), numpy.float32)
-                if use_vad:
-                    ass_path = pathlib.Path(audio_file).with_name('mask.ass')
+                if use_mask:
+                    ass_path = pathlib.Path(audio_file).with_name("mask.ass")
                     is_ass = ass_path.exists()
                     if is_ass:
+                        # mask non-vocal parts with mask file
                         segments = ass_to_time_array(ass_path)
                         time_scale = 1
                     else:
                         # mask non-vocal parts using VAD
-                        segments = vad.generate(audio_file.as_posix())[0]['value']
-                        time_scale = 1/1000
+                        if vad is None:
+                            from funasr import AutoModel
+                            vad = AutoModel(
+                                model="fsmn-vad", model_revision="v2.0.4", disable_update=True,
+                                log_level="ERROR", disable_pbar=True, disable_log=True
+                            )
+                        segments = vad.generate(audio_file.as_posix())[0]["value"]
+                        time_scale = 1 / 1000
                     mask = numpy.zeros_like(curve)
                     for start_ms, end_ms in segments:
-                        start = round(start_ms * time_scale * sample_rate / hop_size)
+                        start = min(round(start_ms * time_scale * sample_rate / hop_size), mask.shape[0])
                         end = min(round(end_ms * time_scale * sample_rate / hop_size), mask.shape[0])
                         mask[start: end] = 1
                     if is_ass:
@@ -183,12 +186,12 @@ def preprocess(
     else:
         val_indices = sorted(numpy.random.choice(len(len_list), val_num, replace=False))
     lengths = []
-    with open(target_dir / "train.txt", "w", encoding='utf8') as f:
+    with open(target_dir / "train.txt", "w", encoding="utf8") as f:
         for i, npz_file in enumerate(npz_list):
             if i not in val_indices:
                 f.write(str(npz_file) + "\n")
                 lengths.append(len_list[i])
-    with open(target_dir / "valid.txt", "w", encoding='utf8') as f:
+    with open(target_dir / "valid.txt", "w", encoding="utf8") as f:
         for i in val_indices:
             f.write(npz_list[i] + "\n")
     numpy.save(target_dir / "lengths.npy", lengths)
@@ -209,16 +212,16 @@ def process_error_value(timestamps, values):
 
 
 def ass_to_time_array(ass_file):
-    with open(ass_file, 'r', encoding='utf-8') as f:
+    with open(ass_file, "r", encoding="utf-8") as f:
         lines = f.readlines()
-    event_lines = [line for line in lines if line.startswith('Dialogue') or line.startswith('Comment')]
+    event_lines = [line for line in lines if line.startswith("Dialogue") or line.startswith("Comment")]
     time_array = []
     for event_line in event_lines:
-        times = re.findall(r'\d:\d{2}:\d{2,3}.\d{2}', event_line)
+        times = re.findall(r"\d:\d{2}:\d{2,3}.\d{2}", event_line)
         if times:
             start_time, end_time = times
-            start_seconds = sum(float(x) * 60 ** (2 - i) for i, x in enumerate(start_time.split(':')))
-            end_seconds = sum(float(x) * 60 ** (2 - i) for i, x in enumerate(end_time.split(':')))
+            start_seconds = sum(float(x) * 60 ** (2 - i) for i, x in enumerate(start_time.split(":")))
+            end_seconds = sum(float(x) * 60 ** (2 - i) for i, x in enumerate(end_time.split(":")))
             time_array.append((start_seconds, end_seconds))
 
     return time_array
