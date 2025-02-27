@@ -1,3 +1,4 @@
+import re
 import json
 import pathlib
 import sys
@@ -140,13 +141,22 @@ def preprocess(
                 t_mel = numpy.linspace(0, len(audio) / sample_rate, mel.shape[0])
                 curve = numpy.ndarray.astype(interp_fn(t_mel), numpy.float32)
                 if use_vad:
-                    # mask non-vocal parts using VAD
+                    ass_path = pathlib.Path(audio_file).with_name('mask.ass')
+                    is_ass = ass_path.exists()
+                    if is_ass:
+                        segments = ass_to_time_array(ass_path)
+                        time_scale = 1
+                    else:
+                        # mask non-vocal parts using VAD
+                        segments = vad.generate(audio_file.as_posix())[0]['value']
+                        time_scale = 1/1000
                     mask = numpy.zeros_like(curve)
-                    segments = vad.generate(audio_file.as_posix())[0]['value']
                     for start_ms, end_ms in segments:
-                        start = round(start_ms / 1000 * sample_rate / hop_size)
-                        end = min(round(end_ms / 1000 * sample_rate / hop_size), mask.shape[0])
+                        start = round(start_ms * time_scale * sample_rate / hop_size)
+                        end = min(round(end_ms * time_scale * sample_rate / hop_size), mask.shape[0])
                         mask[start: end] = 1
+                    if is_ass:
+                        mask = 1 - mask
                     curve *= mask
                 # error value process
                 frame_indices = []
@@ -173,12 +183,12 @@ def preprocess(
     else:
         val_indices = sorted(numpy.random.choice(len(len_list), val_num, replace=False))
     lengths = []
-    with open(target_dir / "train.txt", "w") as f:
+    with open(target_dir / "train.txt", "w", encoding='utf8') as f:
         for i, npz_file in enumerate(npz_list):
             if i not in val_indices:
                 f.write(str(npz_file) + "\n")
                 lengths.append(len_list[i])
-    with open(target_dir / "valid.txt", "w") as f:
+    with open(target_dir / "valid.txt", "w", encoding='utf8') as f:
         for i in val_indices:
             f.write(npz_list[i] + "\n")
     numpy.save(target_dir / "lengths.npy", lengths)
@@ -196,6 +206,22 @@ def process_error_value(timestamps, values):
             break
 
     return error_value_segment
+
+
+def ass_to_time_array(ass_file):
+    with open(ass_file, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    event_lines = [line for line in lines if line.startswith('Dialogue') or line.startswith('Comment')]
+    time_array = []
+    for event_line in event_lines:
+        times = re.findall(r'\d:\d{2}:\d{2,3}.\d{2}', event_line)
+        if times:
+            start_time, end_time = times
+            start_seconds = sum(float(x) * 60 ** (2 - i) for i, x in enumerate(start_time.split(':')))
+            end_seconds = sum(float(x) * 60 ** (2 - i) for i, x in enumerate(end_time.split(':')))
+            time_array.append((start_seconds, end_seconds))
+
+    return time_array
 
 
 if __name__ == "__main__":
